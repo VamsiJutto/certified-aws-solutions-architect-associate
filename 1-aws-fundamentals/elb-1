@@ -1,0 +1,279 @@
+# Elastic Load Balancers
+
+## Scalability and High Availability
+
+- Scalability means that a system can handle greater loads by adapting
+- We can distinguish two types of scalability strategies:
+    - **Vertical Scalability** (scale up/down)
+        - Increase the size of the current instance (ex. from a t2.micro instance migrate to a t2.large one)
+        - Vertical scalability is common for non-distributed systems, such as databases
+        - RDS, ElastiCache are services that can scale vertically
+    - **Horizontal Scalability** (scale out/in)
+        - Increase the number of instances on which the application runs
+        - Horizontal scaling implies having a distributed system
+        - It's easy to scale horizontally thanks to cloud offerings such as EC2
+- High Availability means running our application in at least 2 data centers (AZs)
+    - The goal of high availability is to survive a data center loss
+- High Availability can be:
+    - Passive
+    - Active
+- Load balancers can scale but not instantaneously - contact AWS for a "warm-up"
+- Troubleshooting:
+    - 4xx errors are client induced errors
+    - 5xx errors are application induced errors (server side errors)
+    - Error 503 means that the load balancer is at capacity or no registered targets can be found
+    - If the load balancer can't connect to the application, it most likely means that the security group blocks the connection (for load balancers that use security groups)
+- Monitoring:
+    - ELB access logs will log all the access requests to the LB (logs are delivered to S3 when enabled)
+    - CloudWatch Metrics will give aggregate statistics (example: connection counts)
+    - Use CloudWatch alarms to alert on unhealthy host counts, high latencies, high 5xx rates, etc.
+
+## Load Balancing Basics
+
+- Load balancers are servers that forward internet traffic to multiple other servers (most likely EC2 instances)
+- Why use load balancers?
+    - Spread load across multiple downstream instances
+    - Expose a single point of access (DNS) to the application
+    - Seamlessly handle failures of downstream instances (by using health checks)
+    - Do regular health checks to registered instances
+    - Provide SSL/TLS termination (HTTPS) for the website hosted on the downstream instances
+    - Enforce stickiness for cookies (session affinity)
+    - High availability across availability zones (load balancer can be spread across multiple AZs, not regions!!!)
+    - Cleanly separate public traffic from private traffic
+- An ELB (Elastic Load Balancer) is a **managed load balancer** which means:
+    - AWS guarantees that it will be working
+    - AWS takes care of upgrades, maintenance and high availability
+    - An ELB provides a few configuration options for us also
+    - It costs less to setup our custom load balancer, but it will be a lot more effort to maintain on the long run
+    - An ELB is integrated with many AWS offerings/services, it will be more flexible than a custom LB
+- Integration / useful features:
+    - Can be used with Auto Scaling groups to add/remove instances and keep targets healthy
+    - Route 53 can use Alias records to point directly to ELB names (no extra DNS cost). Alias records support apex domains (unlike CNAME).
+    - All modern ALB/NLB/CLB support access logs to S3 (must be enabled)
+    - ALB supports AWS WAF (web application firewall) for protecting HTTP(S) endpoints
+
+## Health Checks
+
+- They enable for a LB to know if an instance for which traffic is forwarded is available to reply to requests
+- The health checks are done using a port and a route (usually /health) and have configurable parameters:
+    - Interval (how often to run the check)
+    - Timeout (how long to wait for a response)
+    - Healthy threshold (number of successive successes before marking healthy)
+    - Unhealthy threshold (number of failures before marking unhealthy)
+    - Success codes (for HTTP checks you can configure which HTTP status codes are considered healthy; defaults are often 200)
+- If the response is not considered successful, then the instance is considered unhealthy and LB will stop sending traffic to it
+- Health checks differ by LB type: HTTP/HTTPS for ALB/CLB, TCP for NLB (or TLS), and for target groups you can select the appropriate protocol
+
+## Types of Load Balancers on AWS
+
+- AWS provides 4 types of load balancers:
+    - Classic Load Balancer (CLB - v1, old generation): supports HTTP, HTTPS and TCP
+    - Application Load Balancer (ALB - v2, new generation): supports HTTP, HTTPS, HTTP/2, gRPC and WebSockets
+    - Network Load Balancer (NLB - v2, new generation): supports TCP, TLS (secure TCP), UDP and preserves source IP
+    - Gateway Load Balancer (GLB - new generation): used for deploying, scaling and running third-party virtual appliances (e.g., firewalls)
+- It is recommended to use the newer versions (ALB/NLB/GLB) for modern features
+- We can setup **internal** (private) and **internet-facing** (public) load balancers on AWS
+- IP address type: ALB/NLB can be created as IPv4-only or dualstack (IPv4 + IPv6)
+
+### Classic Load Balancers (CLB)
+
+- They support 2 types of connections: TCP (layer 4) and HTTP(S) (layer 7)
+- Health checks are either TCP or HTTP based
+- CLBs provide a fixed hostname: XXX.region.elb.amazonaws.com
+- Cookie stickiness is using a load-balancer generated cookie (AWSELB)
+- CLB is considered legacy — use ALB or NLB for new applications unless you have legacy constraints
+
+### Application Load Balancers (ALB)
+
+- They are a layer 7 type load balancer (only HTTP or HTTPS)
+- They allow load balancing to multiple HTTP applications across multiple machines (target groups). Also they allow to load balance to multiple applications on the same EC2 instance (useful in case of containerized apps)
+- They have support for HTTP/2 and WebSockets, and support gRPC
+- They support redirects (e.g., HTTP to HTTPS) and fixed responses
+- They provide advanced routing:
+    - Routing based on path in URL (path-based routing)
+    - Routing based on the hostname (host-based routing)
+    - Routing based on query strings, headers, HTTP methods and source IP (advanced rules)
+- ALBs are a great fit for micro-services and container-based applications
+- ALBs have port mapping features to redirect to dynamic ports in case of ECS (awsvpc mode and port mappings)
+- Target groups can contain:
+    - EC2 instances (can be managed by an Auto Scaling Group)
+    - ECS tasks (managed by ECS itself)
+    - Lambda Functions - HTTP request is translated to a JSON event
+    - IP Addresses - must be private IP addresses (useful for on-prem or other VPCs)
+- ALBs also provide a fixed hostname (same as CLBs): XXX.region.elb.amazonaws.com
+- The application servers behind the LB cannot see the IP of the client directly, but they can retrieve it from the X-Forwarded-For header. The port can be fetched from X-Forwarded-Port and the protocol from X-Forwarded-Proto
+- ALB supports:
+    - Authentication actions (authenticate users using OIDC or Cognito) on rules
+    - WAF integration for Layer 7 protection
+    - Redirect and fixed-response actions
+    - Request/response modification via Lambda@Edge is not directly ALB; but ALB supports invoking Lambda targets
+- Sticky sessions:
+    - ALB generates an application-controlled cookie (AWSALB) or you can configure duration-based stickiness on target groups
+    - Stickiness is configured per target group
+
+### Network Load Balancers (NLB)
+
+- Network load balancers (layer 4) allow to:
+    - Forward TCP and UDP (and TLS) traffic to the registered instances
+    - Handle millions of requests per second with very low latency (millisecond-level)
+    - Preserve the source IP of the client so the target can see the original client IP (no need for X-Forwarded-For)
+- NLBs have **one static IP per AZ** and support Elastic IPs (can be used when whitelisting is necessary)
+- Use cases for NLBs: extreme performance for TCP/UDP traffic, gaming, IoT, real-time streaming, and when preserving source IP is required
+- NLB characteristics:
+    - TCP flow stickiness can be configured
+    - You can create TLS listeners on NLBs and perform TLS termination (uses certificates); NLB also supports TLS passthrough depending on configuration (check current AWS docs for specifics)
+    - NLB does not use security groups (it's a network-level device); security should be handled by the targets' security groups and NACLs
+- Instances behind an NLB see traffic coming from the original client IP (important when using host-based ACLs)
+
+### Gateway Load Balancer (GLB)
+
+- Gateway Load Balancer is designed to deploy, scale, and manage third-party virtual appliances (firewalls, intrusion detection systems)
+- It provides a single entry point for virtual appliances and uses the GENEVE protocol to encapsulate traffic to appliance endpoints
+- Typical use-case: insert and scale virtual appliances in the data path; works with third-party partners
+- GLB is used in conjunction with Gateway Load Balancer endpoints (GWLBE) inside VPCs
+
+## Stickiness (Session Affinity)
+
+- It is possible to implement stickiness in case of CLB and ALB load balancers (and some NLB TCP flow stickiness options)
+- Stickiness means that the traffic from the same client will be forwarded to the same target instance
+- Stickiness works by adding a cookie to the request which has an expiration date for controlling the stickiness period
+    - CLB cookie name: AWSELB (load balancer generated)
+    - ALB cookie name: AWSALB (application cookie) or duration-based stickiness
+- Possible use case for stickiness: we have to make sure that the user does not lose his session data stored locally on an instance
+- Enabling stickiness may bring imbalance to the load across the downstream target instances — prefer stateless services or external session stores (ElastiCache/DynamoDB/RDS)
+
+## Cross-Zone Load Balancing
+
+- With Cross-Zone Load Balancing enabled each LB instance distributes traffic evenly across multiple AZs
+- Otherwise, each LB node distributes requests evenly only in the AZ where it is registered
+- Classic Load Balancer: 
+    - Cross-zone load balancing is disabled by default
+    - No additional charges for cross-zone load balancing if the feature is enabled
+- Application Load Balancer: 
+    - Cross-zone load balancing is always on and cannot be disabled
+    - No charges applied for cross-zone load balancing
+- Network Load Balancer:
+    - Cross-zone load balancing is disabled by default
+    - Additional charges apply if the feature is enabled
+
+## SSL/TLS Certificates
+
+- An SSL certificate allows traffic to be encrypted between the clients and the load balancers. This is called encryption in transit or in-flight encryption
+- SSL - Secure Socket Layer
+- TLS (newer version of SSL) - Transport Layer Security
+- Nowadays TLS is mainly used, but we still commonly say "SSL/TLS"
+- Public SSL certificates are issued by a Certificate Authority
+- SSL certificates have expiration dates and they must be renewed
+- SSL termination: client can talk with a LB using HTTPS but internal traffic can be routed to a target using HTTP (this is TLS termination on the load balancer)
+- Load balancers can load an X.509 certificate (which is a SSL/TLS server certificate)
+- We can manage certificates in AWS using ACM (AWS Certificate Manager)
+    - ACM certificates can be used with ALB, NLB (for TLS listeners) and CloudFront
+    - ACM public certificates are regional; CloudFront requires the certificate in us-east-1 (global)
+- HTTPS Listener:
+    - We must specify a default certificate
+    - We can add an optional list of certificates to support multiple domains
+    - Clients can use SNI (Server Name Indication) to specify which hostname they want to reach
+    - Ability to specify a security policy to support older versions of SSL/TLS (for legacy clients)
+- For end-to-end encryption, enable HTTPS/TLS between the LB and the targets and install certificates on targets or use ACM and proper listener/target group settings
+
+### SNI - Server Name Indication
+
+- SNI solves the problem of being able to load multiple SSL certificates onto one web server
+- There is a newer protocol which requires the client to indicate the hostname of the target server in the initial SSL handshake
+    - In case of AWS this only works for ALB, NLB and CloudFront (no CLB!)
+- Use SNI when you host multiple HTTPS domains on the same load balancer
+
+## ELB - Connection Draining / Deregistration Delay
+
+- Feature naming:
+    - In case of a CLB it is called Connection Draining
+    - For target groups (ALB, NLB) it is called Deregistration Delay
+- Connection draining is the time to complete in-flight requests while the instance is de-registering or unhealthy. Basically it allows the instance to finish processing what it was doing
+- The LB will stop sending new requests to the target instance which is in the process of de-registering
+- The time period of the connection draining can be set between 1 second to 3600 seconds
+- It also can be disabled (set the period to 0 seconds)
+- Default deregistration delay for ALB target groups: 300 seconds (check current defaults in AWS docs)
+
+## Timeouts and Connection Behavior
+
+- ALB idle timeout (default 60 seconds) — if a connection is idle for longer than this value, the ALB closes the connection
+- CLB also has an idle timeout (default 60 seconds)
+- NLB operates at layer 4 and is optimized for long-lived TCP connections; it does not use the same idle timeout semantics as ALB
+- For long-lived websocket or streaming connections, ensure load balancer timeouts and target behavior are configured appropriately
+
+## Access Logs and Monitoring
+
+- ELB access logs:
+    - Must be enabled and delivered to an S3 bucket you specify
+    - Logs include client IP, backend IP, request processing times, target processing times, response codes, and more
+- CloudWatch metrics:
+    - Metrics differ slightly per LB type but include healthy/unhealthy host counts, request count, latency, 4xx/5xx rates, target response codes, and more
+- Use VPC Flow Logs, access logs, and CloudWatch Logs for deeper network-level diagnostics
+
+## Pricing and Limits (exam-level considerations)
+
+- Pricing factors:
+    - ALB: charged per hour (or partial hour) and per LCU (load balancer capacity units) based on new LCU model (requests, new connections, active connections, and processed bytes)
+    - NLB: charged per hour and per processed GB; static IPs (Elastic IPs) have their own costs
+    - CLB: charged per hour and per GB (legacy)
+    - Enabling cross-zone on NLB may incur charges
+- Soft limits and quotas apply (number of load balancers per region, listeners, target groups, rules). Use Service Quotas to view and request increases.
+
+## Security
+
+- Security groups:
+    - ALB supports security groups (you must allow inbound traffic on listeners)
+    - NLB does not support security groups (targets' security groups must allow traffic)
+- IAM:
+    - Use IAM policies to restrict who can create/modify load balancers, listeners, target groups, and certificates (ACM)
+- Network ACLs and route tables apply as usual for VPC resources
+- Protection:
+    - Use AWS WAF with ALB to protect against common web attacks (SQL injection, XSS, etc.)
+    - Consider AWS Shield for DDoS protection (Shield Standard included, Shield Advanced for higher protection and cost coverage)
+
+## Choosing the Right Load Balancer (Exam Tips)
+
+- Use ALB when:
+    - You need advanced Layer 7 routing (host/path, headers, query string)
+    - You need WebSockets, HTTP/2, gRPC, WAF, or OIDC/Cognito authentication
+    - You're serving containerized microservices
+- Use NLB when:
+    - You need ultra-high performance and extremely low latency at Layer 4
+    - You need to preserve the client source IP
+    - You need static IPs per AZ or Elastic IP support for whitelisting
+- Use GLB when:
+    - You need to insert and scale third-party appliances (firewalls, IDS, etc.)
+- CLB is legacy — only use for older, existing environments; prefer ALB/NLB for new deployments
+
+## Additional Useful Features
+
+- Target groups:
+    - Allow multiple target groups per load balancer and one target can belong to multiple groups
+    - Support dynamic registration and deregistration by Auto Scaling or ECS
+    - Support health checks and stickiness configuration per target group
+- Slow start mode (ALB target groups):
+    - Gradually increase the load on newly registered targets to avoid overwhelming them
+- Request tracing:
+    - ALB supports X-Ray tracing integration (check AWS docs on sample rates and configuration)
+- Proxy protocol:
+    - Available for some load balancer configurations to preserve client IP and port information when the LB cannot add X-Forwarded headers (commonly used with certain TCP load-balancing setups)
+
+## Exam-oriented Reminders
+
+- Know which LB to use for which use-case (ALB for HTTP/HTTPS and advanced routing, NLB for performance and preserving IP, GLB for appliances)
+- Remember that ALB is Layer 7 (HTTP/HTTPS) and NLB is Layer 4 (TCP/UDP)
+- Understand where TLS termination can happen and the implications (certificate location, ACM usage, end-to-end encryption)
+- Route53 alias records can point to load balancers and are preferred over CNAME at the zone apex
+- Health checks and Auto Scaling integration: Auto Scaling will only add/remove instances; LB health checks determine whether an instance receives traffic
+- Default deregistration delay is 300s for ALB target groups (useful for exam questions about draining)
+- Cross-zone load balancing behavior differs between CLB/ALB/NLB — ALB always on; CLB and NLB have configurable settings and differing defaults/charges
+
+## Common Troubleshooting Checklist
+
+- Is the load balancer's security group allowing inbound traffic from clients (for ALB/CLB)?
+- Are targets' security groups allowing traffic from the load balancer (or from the client for NLB)?
+- Are health check settings correct (path, port, success codes, timeouts, thresholds)?
+- Are the instances registered in the correct target group or ELB?
+- Are listener rules and target group mappings correct?
+- Check access logs and CloudWatch metrics for 5xx spikes, latency, or unhealthy hosts
+- For TLS issues, verify ACM certificates, listener configuration, and backend port/protocols if doing end-to-end TLS
